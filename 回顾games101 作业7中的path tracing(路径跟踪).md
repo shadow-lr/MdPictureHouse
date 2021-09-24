@@ -202,7 +202,7 @@ in Material.hpp
 
 
 
-侧边绿色不显示是 因为没有修改成tenter<=text
+侧边绿色不显示是 因为没有修改成tenter<=text，看了bbs的帖子，因为此处的绿色墙壁是一个平面，包围盒的高度为0，所以存在**tenter＝texit的情况**
 
 ![image-20210915090130981](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\image-20210915090130981.png)
 
@@ -228,10 +228,6 @@ float Material::pdf(const Vector3f &wi, const Vector3f &wo, const Vector3f &N){
 }
 ```
 
-// TODO：下午搞搞多线程
-
-
-
 思考题，光线弹射停止的时候的期望
 
 ![img](http://games-cn.org/wp-content/uploads/2020/04/E7731D15-CADD-4F04-92CE-C1DE800E4110.jpeg)
@@ -249,6 +245,12 @@ float Material::pdf(const Vector3f &wi, const Vector3f &wo, const Vector3f &N){
 ![image-20210917125922194](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\image-20210917125922194.png)
 
 f_r：brdf项，在作业框架中可以看到是与材质相关，本作业中所有的材质均是漫反射材质，所以初始化的时候设置了一个漫反射项系数Kd（`Vector3f`类型），这里`Vector3f diffuse = Kd / M_PI`是取x，y，z每个分量在半球上的每度的均值，我理解为Kd是指材质本身在`red、green、blue`上能吸收多少能量在半球上，那么在某个三维角度（x，y，z）上吸收多少能量，故每个分量除以`PI`（个人理解）
+
+
+
+漫反射项除以`PI`，是为了**能量守恒**，更详细的分析过程请看这篇
+
+**为什么PBR中Lambert光照要除PI?**：https://zhuanlan.zhihu.com/p/29837458
 
 ```cpp
 /// <param name="wi">入射</param>
@@ -295,6 +297,88 @@ PBRT学习笔记：在单位圆内部均匀采样：https://blog.csdn.net/codebo
 
 圆面、球面上的采样方法：https://blog.csdn.net/yjr3426619/article/details/102706968?utm_medium=distribute.pc_relevant.none-task-blog-2%7Edefault%7ECTRLIST%7Edefault-2.no_search_link&depth_1-utm_source=distribute.pc_relevant.none-task-blog-2%7Edefault%7ECTRLIST%7Edefault-2.no_search_link
 
+#### 基于着色点的半球随机向量生成
+
+作业框架中涉及这部分的代码如下
+
+```cpp
+	// uniform sample on the hemisphere
+	float x_1 = get_random_float(), x_2 = get_random_float();
+	// z belongs to [-1, 1]
+	float z = std::fabs(1.0f - 2.0f * x_1);
+	// r belongs to [0, 1]
+	// phi 半球的立体角是2pi
+	float r = std::sqrt(1.0f - z * z), phi = 2 * M_PI * x_2;
+    // 均匀平滑r的分布 [0, 1]
+    // 采样大小和方向
+	Vector3f localRay(r * std::cos(phi), r * std::sin(phi), z);
+	return toWorld(localRay, N);
+```
+
+in Material.hpp
+
+这部分代码在 [Ray Tracing: The Rest of Your Life](https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html)中有所涉及，不过与作业框架中的代码不同
+
+```cpp
+	float r_1 = get_random_float(), r_2 = get_random_float();
+	float x = std::cos(2 * M_PI * r_1) * 2 * std::sqrt(r_2 * (1 - r_2));
+	float y = std::sin(2 * M_PI * r_1) * 2 * std::sqrt(r_2 * (1 - r_2));
+	float z = 1 - 2 * r_2;
+	Vector3f random_point(x, y, z);
+```
+
+对于统一随机数 r1 和 r2，一维MC集成一章的内容如下:
+$$
+r1=\int_0^{\theta}{\frac{1}{2\pi}dt}=\frac{\phi}{2\pi}
+$$
+求解$\phi$我们得到：
+$$
+\phi =2\pi ·r_1
+$$
+对于θ我们有：
+$$
+r_2=\int_0^{\theta}{2\pi f\left( t \right) \sin \left( t \right) \mathrm{d}t}
+$$
+首先让我们在球体上尝试均匀密度。单位球的面积是$4Π$，所以单位球上的一个均匀的$p(direction)=\frac{1}{4pi}$。
+$$
+r2=\int_0^{\theta}{2\pi \frac{1}{4\pi}\sin \left( t \right) \mathrm{d}t=\int_0^{\theta}{\frac{1}{2}\sin \left( t \right) \mathrm{d}t=\frac{-\cos \left( \theta \right)}{2}}-\frac{-\cos \left( 0 \right)}{2}}=\frac{1-\cos \left( \theta \right)}{2}
+$$
+求解cos(θ)给出：
+$$
+\cos \left( \theta \right) =1-2r_2
+$$
+我们不求解，因为我们可能只需要知道cos(θ)，而不希望不必要的arccos()调用到处运行
+
+为了生成指向(θ, φ)的单位矢量，我们转换为笛卡尔坐标
+$$
+x=\cos \left( \phi \right) ·\sin \left( \theta \right) 
+\\
+y=\sin \left( \phi \right) ·\sin \left( \theta \right) 
+\\
+z=\cos \left( \theta \right)
+$$
+使用恒等式$cos^2+sin^2=1$，我们得到以下随机的$(r_1,r_2)$
+$$
+x=\cos \left( 2\pi ·r_1 \right) \sqrt{1-\left( 1-2r_2 \right) ^2}
+\\
+y=\sin \left( 2\pi ·r_1 \right) \sqrt{1-\left( 1-2r_2 \right) ^2}
+\\
+z=1-2r_2
+$$
+参考自：
+
+- https://zhuanlan.zhihu.com/p/371231759
+
+- https://blog.csdn.net/freesouths/article/details/90733738
+
+- https://www.freesion.com/article/44151278901/
+
+#### ToWorld函数
+
+此处的BCN看成是TBN就好了，将切线空间下的随机单位向量变换成世界空间坐标系的三维向量，然后再参与运算
+
+![image-20210918183246880](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\image-20210918183246880.png)
+
 
 
 ### Cook-Torrance光照模型
@@ -319,10 +403,57 @@ G：(Geometry Function)几何函数
 
 - https://zhuanlan.zhihu.com/p/160804623
 - 图形学｜PBR：Schlick近似方法：https://zhuanlan.zhihu.com/p/372110183
-
 - 基于物理着色（二）- Microfacet材质和多层材质：https://zhuanlan.zhihu.com/p/20119162
-
 - LearnOpenglPBR：https://learnopengl-cn.github.io/07%20PBR/01%20Theory/
+- 物理渲染学习笔记（三）——Cook-Torrance微表面模型：https://gameinstitute.qq.com/community/detail/123254
+
+### 存在的问题
+
+- Cook-Torrance模型无法表示，在粗糙度为0的情况下，物体表面绝对光滑（呈现镜面渲染的效果）
+
+在BBS上翻到遇到类似问题的人：https://schuttejoe.github.io/post/ggximportancesamplingpart1/
+
+
+
+#### 解决过程
+
+<blockquote>
+    The first technique I want to write about is to importance sample only D(ω^m). This is quite effective since the distribution of normals does have a significant impact on shape of the entire BRDF. To importance sample D(ω^m) we will use the inverse of the CDF of D(ω^m) to generate a microfacet normal ω^m. If you are familar with using GGX in game rendering this can be thought of as creating a half vector in tangent space. The derivation of the inverse of the CDF is covered in detail in Cao Jaiyin’s post here so I’ll just refer you to that for the details and list the relevant equations here:
+</blockquote>
+
+我想写的第一个技术是只对D(ω^m)进行重要性采样。这是非常有效的，因为法线的分布对整个BRDF的形状有很大影响。为了对D(ω^m)进行重要性采样，我们将使用D(ω^m)的CDF的逆值来生成一个微面正态ω^m。如果你对在游戏渲染中使用GGX很熟悉的话，这可以被认为是在切线空间中创建一个半矢量。CDF的逆推法在曹佳音的帖子里有详细的介绍，所以我只想让你参考一下，并在这里列出相关的方程式。
+$$
+\theta _m=arc\cos \sqrt{\frac{1-\xi _0}{\xi \left( \alpha ^2-1 \right) +1}}\,\,       \phi =2\pi \xi _1
+$$
+
+<blockquote>
+    Now, if you remember how importance sampling works, you’ll know that we are eventually going to need to divide our result by the pdf of the sample we take. As we will see the convienance of later, the pdf for generating the spherical coordinates is very similar to the distribution of normals itself. From Cao’s post we have:
+</blockquote>
+
+现在，如果你还记得重要性抽样的工作原理，你就会知道，我们最终需要用我们的结果除以我们抽取的样本的pdf。正如我们稍后将看到的便利，生成球面坐标的pdf与法线分布本身非常相似。从Cao的帖子中我们可以看到。
+$$
+p\left( \theta _m,\phi \right) =\frac{\alpha ^2\cos \theta _m\sin \theta _m}{\pi \left( \left( \alpha ^2-1 \right) \cos ^2\theta _m+1 \right) ^2}
+$$
+
+<blockquote>
+    The next step we’ll want to take is to transform these spherical coordinates into Cartesian coordinates. I think if you are familar with everything I’ve said so far you probably already know the equations for this but I’ll list them for the sake of completeness. With one last reminder that I am using Y-up, here they are:<br>
+    where r = 1 in this case. This gives us ω^m.
+
+</blockquote>
+
+下一步我们要做的是将这些球面坐标转换为直角坐标。我想如果你对我到目前为止所说的一切都很熟悉的话，你可能已经知道了这方面的方程式，但为了完整起见，我还是要把它们列出来。最后提醒一下，我使用的是Y-up，它们在这里。
+$$
+x=r\sin \theta \cos \phi 
+\\
+y=r\cos \theta 
+\\
+z=r\sin \theta \sin \phi
+$$
+
+在这种情况下，r=1。这就给了我们$ω^m$
+
+
+
 
 
 
